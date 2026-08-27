@@ -1,0 +1,6 @@
+{
+  "name": "j͑ʃ'ɜ ſןɹ j͐ʃɹʞ 📖",
+  "description": "A customized Wikipedia and Wiktionary viewer with unique design elements based on user's conlang styling.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

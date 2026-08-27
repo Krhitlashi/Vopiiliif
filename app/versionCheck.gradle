@@ -1,0 +1,9 @@
+repositories { mavenCentral(); google() }
+configurations { myConf }
+dependencies { myConf 'dev.chrisbanes.haze:haze:+' }
+task printHazeVersion {
+    doLast {
+        def version = configurations.myConf.resolvedConfiguration.firstLevelModuleDependencies.first().moduleVersion
+        println("HAZE_VERSION_RESOLVED: " + version)
+    }
+}
