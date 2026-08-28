@@ -121,12 +121,12 @@ private val AllowedInlineTags = setOf("a", "b", "strong", "i", "em", "span", "su
 // fraction of the time while producing the same inline-safe HTML.
 private fun sanitizeElementInline(element: Element): String {
     // Drop HTML comments (Jsoup.clean did too) so comment text can't confuse the
-    // rich-text parser downstream.
+    // rich-text parser downstream. childNodes() is an unmodifiable view, so
+    // Iterator.remove() throws UnsupportedOperationException whenever a page
+    // contains a comment; remove through the live node tree instead.
     for (desc in element.getAllElements()) {
-        val nodes = desc.childNodes()
-        val nodeIt = nodes.iterator()
-        while (nodeIt.hasNext()) {
-            if (nodeIt.next() is org.jsoup.nodes.Comment) nodeIt.remove()
+        for (child in desc.childNodes().toList()) {
+            if (child is org.jsoup.nodes.Comment) child.remove()
         }
     }
     val toRemove = mutableListOf<Element>()

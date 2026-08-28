@@ -248,7 +248,7 @@ class WikiViewModel : ViewModel() {
                 }
             } catch (t: Throwable) {
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    android.widget.Toast.makeText(context, "Failed to load font - " + (t.localizedMessage ?: t.message), android.widget.Toast.LENGTH_LONG).show()
+                    android.widget.Toast.makeText(context, "Failed to load font - " + (t.localizedMessage ?: t.message ?: "unknown error"), android.widget.Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -415,7 +415,8 @@ class WikiViewModel : ViewModel() {
                 _state.value = WikiState.SuccessSearch(results, _isWiktionary.value)
             } catch (e: Exception) {
                 // Formatting instructions: use " - " instead of colons in strings, and standard parenthesis format
-                _state.value = WikiState.Error("Failed to fetch results - ${e.localizedMessage ?: e.message}")
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                _state.value = WikiState.Error("Failed to fetch results - ${e.localizedMessage ?: e.message ?: "unknown error"}")
             }
         }
     }
@@ -516,7 +517,8 @@ class WikiViewModel : ViewModel() {
                     }
                 }
             } catch (e: Exception) {
-                _state.value = WikiState.Error("Failed to fetch article details - ${e.localizedMessage ?: e.message}")
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                _state.value = WikiState.Error("Failed to fetch article details - ${e.localizedMessage ?: e.message ?: "unknown error"}")
             }
         }
     }
