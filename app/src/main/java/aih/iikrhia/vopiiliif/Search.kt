@@ -73,6 +73,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import aih.iikrhia.vopiiliif.network.SearchResult
 import aih.iikrhia.vopiiliif.network.WikiBlock
+import aih.iikrhia.vopiiliif.network.cleanText
+import aih.iikrhia.vopiiliif.network.queryMatchRanges
 import aih.iikrhia.haxe.*
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.layout.ContentScale
@@ -171,8 +173,16 @@ fun HaxeSearchBar(
 fun SearchResultsList(
     results: List<SearchResult>,
     lazyListState: androidx.compose.foundation.lazy.LazyListState,
-    onResultClick: (SearchResult) -> Unit
+    onResultClick: (SearchResult) -> Unit,
+    query: String = ""
 ) {
+    // Visual style for the part of a title/snippet that matches the typed query.
+    val highlightStyle = SpanStyle(
+        background = MaterialTheme.colorScheme.primaryContainer,
+        color = MaterialTheme.colorScheme.onPrimaryContainer,
+        fontWeight = FontWeight.Bold
+    )
+
     LazyColumn(
         state = lazyListState,
         contentPadding = PaddingValues(top = SpacingAreq, bottom = 120.dp),
@@ -190,16 +200,27 @@ fun SearchResultsList(
                     verticalArrangement = Arrangement.spacedBy(SpacingAreq)
                 ) {
                     Text(
-                        text = result.title,
+                        text = if (query.isNotBlank()) {
+                            highlightQuery(result.title, query, highlightStyle)
+                        } else {
+                            buildAnnotatedString { append(result.title) }
+                        },
                         style = MaterialTheme.typography.displaySmall,
                         color = MaterialTheme.colorScheme.onBackground,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillInlineSize()
                     )
                     if (!result.snippet.isNullOrBlank()) {
-                        val cleanedHtml = cleanHtmlSymbols(result.snippet)
+                        // cleanText strips the server's <span class="searchmatch">
+                        // markup and unescapes entities, leaving the plain text that
+                        // we highlight ourselves against the typed query below.
+                        val cleaned = cleanText(result.snippet)
                         Text(
-                            text = cleanedHtml,
+                            text = if (query.isNotBlank()) {
+                                highlightQuery(cleaned, query, highlightStyle)
+                            } else {
+                                buildAnnotatedString { append(cleaned) }
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 3,
@@ -210,6 +231,19 @@ fun SearchResultsList(
                     }
                 }
             }
+        }
+    }
+}
+
+// Render `text` with every character range that matches the typed query wrapped
+// in `style`, so results and suggestions visibly reflect what was typed.
+fun highlightQuery(text: String, query: String, style: SpanStyle): AnnotatedString {
+    val ranges = queryMatchRanges(text, query)
+    if (ranges.isEmpty()) return buildAnnotatedString { append(text) }
+    return buildAnnotatedString {
+        append(text)
+        for (range in ranges) {
+            addStyle(style, range.first, range.last + 1)
         }
     }
 }

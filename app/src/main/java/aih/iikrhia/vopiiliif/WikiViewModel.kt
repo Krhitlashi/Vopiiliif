@@ -3,6 +3,7 @@ package aih.iikrhia.vopiiliif
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import aih.iikrhia.vopiiliif.network.WikiNetwork
+import aih.iikrhia.vopiiliif.network.rankSearchResults
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -291,13 +292,21 @@ class WikiViewModel : ViewModel() {
             _suggestions.value = emptyList()
             return
         }
+        val trimmed = query.trim()
+        // MediaWiki applies 1-2 character lookups to far too many unrelated titles,
+        // so wait until the user has typed a real prefix before hitting the network.
+        if (trimmed.length < 3) {
+            suggestionsJob?.cancel()
+            _suggestions.value = emptyList()
+            return
+        }
         // Cancel the previous lookup so a stale response can't clobber the
         // suggestion list while the user is still typing.
         suggestionsJob?.cancel()
         suggestionsJob = viewModelScope.launch {
             try {
                 val api = WikiNetwork.getService(_langCode.value, _isWiktionary.value)
-                val response = api.search(query)
+                val response = api.search(trimmed)
                 val titles = response.query?.search?.map { it.title } ?: emptyList()
                 _suggestions.value = titles.distinct().take(16)
             } catch (e: Exception) {
@@ -410,7 +419,11 @@ class WikiViewModel : ViewModel() {
             try {
                 val api = WikiNetwork.getService(_langCode.value, _isWiktionary.value)
                 val response = api.search(query)
-                val results = response.query?.search ?: emptyList()
+                val serverResults = response.query?.search ?: emptyList()
+                // Re-rank so the results that best match the typed query (exact,
+                // prefix, substring, or word matches) appear first instead of being
+                // buried by MediaWiki's full-text ordering.
+                val results = rankSearchResults(serverResults, query)
                 lastSearchResults = results
                 _state.value = WikiState.SuccessSearch(results, _isWiktionary.value)
             } catch (e: Exception) {

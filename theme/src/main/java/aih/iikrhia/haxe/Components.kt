@@ -465,7 +465,10 @@ fun HaxeSelectionItem(
     isSelected: Boolean = false,
     textStyle: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.labelLarge,
     fontWeight: FontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-    textAlign: TextAlign = TextAlign.Center
+    textAlign: TextAlign = TextAlign.Center,
+    // Optional rich text override. When set, this is rendered instead of `text`
+    // so callers can highlight the typed query inside an autocomplete item.
+    annotatedText: androidx.compose.ui.text.AnnotatedString? = null
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
@@ -513,7 +516,7 @@ fun HaxeSelectionItem(
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = text,
+            text = annotatedText ?: androidx.compose.ui.text.buildAnnotatedString { append(text) },
             color = textColor,
             style = textStyle,
             fontWeight = fontWeight,

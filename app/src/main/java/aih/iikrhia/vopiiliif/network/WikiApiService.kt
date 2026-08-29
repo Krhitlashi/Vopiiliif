@@ -27,6 +27,85 @@ data class SearchResult(
     val snippet: String?
 )
 
+// Weighted relevance so the visible result list matches what the user typed: an
+// exact title match outranks an exact prefix, which outranks a substring, and
+// titles mentioning more of the typed words float above titles mentioning fewer.
+// Unrelated results (score 0) sink to the bottom rather than being dropped, in
+// their original server order. sortedWith is a stable sort, so equal scores keep
+// the MediaWiki ranking.
+fun rankSearchResults(results: List<SearchResult>, query: String): List<SearchResult> {
+    val q = query.trim().lowercase()
+    if (q.isEmpty()) return results
+    return results.sortedWith(compareByDescending { relevanceScore(it.title, q) })
+}
+
+// Tie-breaking "did the title reflect the typed text" score for one result.
+private fun relevanceScore(title: String, q: String): Int {
+    val t = title.trim().lowercase().replace('_', ' ')
+    if (t.isEmpty()) return 0
+    if (t == q) return 1_000_000
+
+    var score = 0
+    // Whole-phrase match outranks everything except an exact title.
+    if (t.startsWith(q)) score += 500_000
+    else if (t.contains(q)) score += 150_000
+
+    // Every individual typed word that appears in the title adds its own weight,
+    // so a title containing several words of the query beats one containing one.
+    val tokens = q.split(Regex("\\s+")).filter { it.isNotBlank() }.distinct()
+    for (tok in tokens) {
+        when {
+            t == tok -> score += 40_000
+            t.startsWith("$tok ") -> score += 25_000
+            t.contains(" $tok ") -> score += 18_000
+            t.startsWith(tok) -> score += 8_000
+            t.contains(tok) -> score += 3_000
+        }
+    }
+    return score
+}
+
+// Case-insensitive character ranges of the typed query within `text`, so the UI
+// can highlight exactly which part of a title/snippet matched. Includes the full
+// phrase plus each individual word; ranges are collected, sorted, then merged so
+// overlapping or adjacent hits become one contiguous highlight.
+fun queryMatchRanges(text: String, query: String): List<IntRange> {
+    val ranges = mutableListOf<IntRange>()
+    if (text.isBlank() || query.isBlank()) return ranges
+    val lower = text.lowercase()
+
+    fun raw(occurrence: String) {
+        if (occurrence.isBlank()) return
+        val needle = occurrence.lowercase()
+        var idx = lower.indexOf(needle)
+        while (idx >= 0) {
+            ranges.add(idx until idx + needle.length)
+            idx = lower.indexOf(needle, idx + 1)
+        }
+    }
+
+    val q = query.trim()
+    raw(q)
+    for (tok in q.split(Regex("\\s+")).filter { it.isNotBlank() && it.length >= 2 }.distinct()) {
+        raw(tok)
+    }
+
+    if (ranges.size <= 1) return ranges
+    val sorted = ranges.sortedBy { it.first }
+    val merged = mutableListOf<IntRange>()
+    var cur = sorted[0]
+    for (next in sorted.drop(1)) {
+        if (next.first <= cur.last + 1) {
+            cur = cur.first..maxOf(cur.last, next.last)
+        } else {
+            merged.add(cur)
+            cur = next
+        }
+    }
+    merged.add(cur)
+    return merged
+}
+
 @JsonClass(generateAdapter = true)
 data class ExtractResponse(
     val query: ExtractQuery?

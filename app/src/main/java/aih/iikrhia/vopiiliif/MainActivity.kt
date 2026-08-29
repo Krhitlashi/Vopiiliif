@@ -719,7 +719,8 @@ fun WikiApp(viewModel: WikiViewModel, modifier: Modifier = Modifier) {
                                             SearchResultsList(
                                                 results = s.results,
                                                 lazyListState = searchLazyListState,
-                                                onResultClick = { viewModel.loadExtract(it.title) }
+                                                onResultClick = { viewModel.loadExtract(it.title) },
+                                                query = searchQuery
                                             )
                                         }
                                     }
@@ -884,6 +885,21 @@ fun WikiApp(viewModel: WikiViewModel, modifier: Modifier = Modifier) {
                                                 viewModel.clearSuggestions()
                                             },
                                             isSelected = false,
+                                            // Highlight the part of each suggestion that
+                                            // matches what is currently typed in the bar.
+                                            annotatedText = if (searchQuery.isNotBlank()) {
+                                                highlightQuery(
+                                                    text,
+                                                    searchQuery,
+                                                    SpanStyle(
+                                                        background = MaterialTheme.colorScheme.primaryContainer,
+                                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                )
+                                            } else {
+                                                null
+                                            },
                                             textStyle = MaterialTheme.typography.bodyLarge,
                                             fontWeight = FontWeight.Normal,
                                             modifier = Modifier.fillInlineSize()
