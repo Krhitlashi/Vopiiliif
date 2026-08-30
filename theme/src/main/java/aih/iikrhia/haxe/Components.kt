@@ -49,6 +49,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeStyle
 import dev.chrisbanes.haze.hazeChild
@@ -463,12 +483,14 @@ fun HaxeSelectionItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     isSelected: Boolean = false,
-    textStyle: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.labelLarge,
+    textStyle: TextStyle = MaterialTheme.typography.labelLarge,
     fontWeight: FontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
     textAlign: TextAlign = TextAlign.Center,
-    // Optional rich text override. When set, this is rendered instead of `text`
-    // so callers can highlight the typed query inside an autocomplete item.
-    annotatedText: androidx.compose.ui.text.AnnotatedString? = null
+    // Optional query-match highlight: the given character ranges are drawn as
+    // rounded Material-You pills with `highlightTextColor` text on top.
+    highlightRanges: List<IntRange> = emptyList(),
+    highlightColor: Color = Color.Unspecified,
+    highlightTextColor: Color = Color.Unspecified
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
@@ -515,12 +537,140 @@ fun HaxeSelectionItem(
             .paddingInline(SpacingAreqp6),
         contentAlignment = Alignment.Center
     ) {
+        val annotated = if (highlightRanges.isNotEmpty() && highlightTextColor != Color.Unspecified) {
+            buildAnnotatedString {
+                append(text)
+                for (range in highlightRanges) {
+                    addStyle(
+                        SpanStyle(color = highlightTextColor, fontWeight = FontWeight.Bold),
+                        range.first.coerceIn(0, text.length),
+                        (range.last + 1).coerceIn(0, text.length)
+                    )
+                }
+            }
+        } else {
+            null
+        }
+        if (annotated != null) {
+            HaxeHighlightText(
+                text = annotated,
+                highlightRanges = highlightRanges,
+                highlightColor = highlightColor,
+                color = textColor,
+                style = textStyle,
+                fontWeight = fontWeight,
+                textAlign = textAlign
+            )
+        } else {
+            Text(
+                text = text,
+                color = textColor,
+                style = textStyle,
+                fontWeight = fontWeight,
+                textAlign = textAlign
+            )
+        }
+    }
+}
+
+// The device's Material You (dynamic) color scheme, or null below Android 12
+// where the app falls back to its static monochrome scheme. Reused by the rich
+// text renderer for links and by every query-match highlight.
+@Composable
+fun rememberDynamicColorScheme(): ColorScheme? {
+    val context = LocalContext.current
+    val darkTheme = isSystemInDarkTheme()
+    return remember(darkTheme, context) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        } else {
+            null
+        }
+    }
+}
+
+// Container pair used for query-match highlights: background + foreground text
+// color, taken from the Material You palette when the device provides one.
+@Composable
+fun rememberHighlightColors(): Pair<Color, Color> {
+    val dynamic = rememberDynamicColorScheme()
+    return (dynamic?.primaryContainer ?: MaterialTheme.colorScheme.primaryContainer) to
+            (dynamic?.onPrimaryContainer ?: MaterialTheme.colorScheme.onPrimaryContainer)
+}
+
+// Text with query-match highlights drawn as rounded pills behind the glyphs.
+// SpanStyle.background can only paint sharp rectangles covering the whole line
+// height, so each match is split into per-line segments via TextLayoutResult
+// and drawn as a rounded rect that hugs the text.
+@Composable
+fun HaxeHighlightText(
+    text: AnnotatedString,
+    highlightRanges: List<IntRange>,
+    highlightColor: Color,
+    modifier: Modifier = Modifier,
+    color: Color = Color.Unspecified,
+    style: TextStyle = LocalTextStyle.current,
+    fontSize: TextUnit = TextUnit.Unspecified,
+    fontWeight: FontWeight? = null,
+    textAlign: TextAlign? = null,
+    maxLines: Int = Int.MAX_VALUE,
+    overflow: TextOverflow = TextOverflow.Clip,
+    inlineContent: Map<String, InlineTextContent> = emptyMap(),
+    cornerRadius: Dp = 6.dp,
+    onTextLayout: (TextLayoutResult) -> Unit = {}
+) {
+    var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
+
+    Box {
+        // First child: drawn behind the Text. The Box wraps the Text, so the
+        // Canvas and the Text share the same origin and size.
+        Canvas(modifier = Modifier.matchParentSize()) {
+            val layout = layoutResult ?: return@Canvas
+            if (highlightRanges.isEmpty()) return@Canvas
+            val radiusPx = cornerRadius.toPx()
+            val length = text.length
+            for (range in highlightRanges) {
+                val start = range.first.coerceIn(0, length)
+                val end = (range.last + 1).coerceIn(start, length)
+                if (end <= start) continue
+                val startLine = layout.getLineForOffset(start)
+                val endLine = layout.getLineForOffset(end - 1)
+                for (line in startLine..endLine) {
+                    val segStart = maxOf(start, layout.getLineStart(line))
+                    val segEnd = minOf(end, layout.getLineEnd(line))
+                    if (segEnd <= segStart) continue
+                    // The layout only exposes per-character boxes, so the segment
+                    // rectangle spans from the first to the last glyph, at the
+                    // full height of its line (like a marker highlighter).
+                    val firstBox = layout.getBoundingBox(segStart)
+                    val lastBox = layout.getBoundingBox(segEnd - 1)
+                    val lineTop = layout.getLineTop(line)
+                    val lineBottom = layout.getLineBottom(line)
+                    val r = minOf(radiusPx, (lineBottom - lineTop) / 2f)
+                    drawRoundRect(
+                        color = highlightColor,
+                        topLeft = Offset(firstBox.left, lineTop),
+                        size = Size(lastBox.right - firstBox.left, lineBottom - lineTop),
+                        cornerRadius = CornerRadius(r, r)
+                    )
+                }
+            }
+        }
         Text(
-            text = annotatedText ?: androidx.compose.ui.text.buildAnnotatedString { append(text) },
-            color = textColor,
-            style = textStyle,
+            text = text,
+            modifier = modifier,
+            color = color,
+            style = style,
+            fontSize = fontSize,
             fontWeight = fontWeight,
-            textAlign = textAlign
+            textAlign = textAlign,
+            maxLines = maxLines,
+            overflow = overflow,
+            inlineContent = inlineContent,
+            onTextLayout = {
+                layoutResult = it
+                onTextLayout(it)
+            }
         )
     }
 }

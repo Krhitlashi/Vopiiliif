@@ -77,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import aih.iikrhia.vopiiliif.network.SearchResult
 import aih.iikrhia.vopiiliif.network.WikiBlock
+import aih.iikrhia.vopiiliif.network.queryMatchRanges
 import aih.iikrhia.haxe.*
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.layout.ContentScale
@@ -866,6 +867,7 @@ fun WikiApp(viewModel: WikiViewModel, modifier: Modifier = Modifier) {
                                 contentPadding = 0.dp,
                                 contentAlignment = Alignment.TopStart
                             ) {
+                                val (highlightBg, highlightFg) = rememberHighlightColors()
                                 LazyColumn(
                                     modifier = Modifier
                                         .fillInlineSize()
@@ -887,19 +889,13 @@ fun WikiApp(viewModel: WikiViewModel, modifier: Modifier = Modifier) {
                                             isSelected = false,
                                             // Highlight the part of each suggestion that
                                             // matches what is currently typed in the bar.
-                                            annotatedText = if (searchQuery.isNotBlank()) {
-                                                highlightQuery(
-                                                    text,
-                                                    searchQuery,
-                                                    SpanStyle(
-                                                        background = MaterialTheme.colorScheme.primaryContainer,
-                                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                        fontWeight = FontWeight.Bold
-                                                    )
-                                                )
+                                            highlightRanges = if (searchQuery.isNotBlank()) {
+                                                queryMatchRanges(text, searchQuery)
                                             } else {
-                                                null
+                                                emptyList()
                                             },
+                                            highlightColor = highlightBg,
+                                            highlightTextColor = highlightFg,
                                             textStyle = MaterialTheme.typography.bodyLarge,
                                             fontWeight = FontWeight.Normal,
                                             modifier = Modifier.fillInlineSize()

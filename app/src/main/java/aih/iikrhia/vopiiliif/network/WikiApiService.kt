@@ -172,7 +172,13 @@ sealed class WikiBlock {
         // items) so citation pills can resolve and show the full reference text.
         val anchorId: String? = null
     ) : WikiBlock()
-    data class Table(val headers: List<String>, val rows: List<List<String>>) : WikiBlock()
+    data class Table(
+        val headers: List<String>,
+        val rows: List<List<String>>,
+        // Images found inside individual cells. Keyed by grid position
+        // (row -> column); the header row uses row index -1.
+        val cellImages: Map<Int, Map<Int, List<WikiBlock.Image>>> = emptyMap()
+    ) : WikiBlock()
     data class Image(val url: String, val caption: String?) : WikiBlock()
 }
 
@@ -258,39 +264,109 @@ fun isLayoutTable(tableElement: Element): Boolean {
     return trs.size <= 1 && cells.size <= 2 && tableElement.select("ul, ol, dl, p, h3, h4, h5").isNotEmpty()
 }
 
+// A cell from an earlier row that must keep occupying its columns (as empty
+// placeholders) until `remaining` rows have been consumed. This is how rowspan
+// is normalized into a rectangular grid.
+private data class PendingSpan(val remaining: Int, val colspan: Int)
+
+// Sanitize one table cell for inline display, pulling any <img> elements out
+// into a separate list so the table renderer can show them in place. The
+// sanitizer unwraps <img> (it is not an allowed inline tag), so images would
+// otherwise be silently dropped.
+private fun sanitizeTableCell(cell: Element, baseUri: String): Pair<String, List<WikiBlock.Image>> {
+    val images = cell.select("img").mapNotNull { extractWikiImage(it, baseUri) }
+    val html = sanitizeElementInline(cell)
+    return html to images
+}
+
 fun parseTable(tableElement: Element, baseUri: String = "https://en.wikipedia.org"): WikiBlock.Table {
     val headers = mutableListOf<String>()
     val rows = mutableListOf<List<String>>()
-    
-    val trElements = tableElement.select("tr")
+    val cellImages = mutableMapOf<Int, MutableMap<Int, MutableList<WikiBlock.Image>>>()
+
+    // Column index -> a rowspan cell still occupying that column in this row.
+    val pending = sortedMapOf<Int, PendingSpan>()
+
+    // Expand one source row (list of th/td elements) into a full grid row.
+    // Cells spanning columns (colspan) emit their content once and blank
+    // placeholders for the rest of the span; cells spanning rows (rowspan)
+    // emit content in this row and schedule blank placeholders for the
+    // following rows. Every row therefore comes out the same width, with no
+    // phantom gaps that would push later cells out of alignment.
+    fun buildRow(cells: List<Element>, rowIndex: Int): List<String> {
+        val out = mutableListOf<String>()
+        var col = 0
+        for (raw in cells) {
+            // Emit placeholders for rowspans started in earlier rows.
+            while (true) {
+                val span = pending[col]
+                if (span == null) break
+                repeat(span.colspan) { out.add("") }
+                if (span.remaining <= 1) pending.remove(col) else pending[col] = span.copy(remaining = span.remaining - 1)
+                col += span.colspan
+            }
+            val colspan = (raw.attr("colspan").toIntOrNull() ?: 1).coerceAtLeast(1)
+            val rowspan = (raw.attr("rowspan").toIntOrNull() ?: 1).coerceAtLeast(1)
+            val (html, images) = sanitizeTableCell(raw, baseUri)
+            out.add(html)
+            if (images.isNotEmpty()) {
+                cellImages.getOrPut(rowIndex) { mutableMapOf() }.getOrPut(col) { mutableListOf() }.addAll(images)
+            }
+            if (colspan > 1) {
+                repeat(colspan - 1) { out.add("") }
+            }
+            if (rowspan > 1) {
+                pending[col] = PendingSpan(rowspan - 1, colspan)
+            }
+            col += colspan
+        }
+        return out
+    }
+
+    // Only rows that are direct children (optionally inside thead/tbody/tfoot)
+    // belong to this grid; a table nested inside a cell must not leak its rows.
+    val trElements = tableElement.select("tr").filter { tr ->
+        val p = tr.parent()
+        p === tableElement || (p != null && p.parent() === tableElement && p.tagName().lowercase() in setOf("thead", "tbody", "tfoot"))
+    }
     if (trElements.isNotEmpty()) {
         val firstRow = trElements.first()
-        val firstRowTh = firstRow?.select("th") ?: emptyList()
-        val firstRowTd = firstRow?.select("td") ?: emptyList()
-        
+        val firstRowCells = firstRow.children().filter { it.tagName().lowercase() in setOf("th", "td") }
+        val firstRowTh = firstRowCells.filter { it.tagName().lowercase() == "th" }
+        val firstRowTd = firstRowCells.filter { it.tagName().lowercase() == "td" }
+
         var startRowIndex = 0
         if (firstRowTh.isNotEmpty() && firstRowTd.isEmpty()) {
-            headers.addAll(firstRowTh.map { sanitizeElementInline(it) })
+            headers.addAll(buildRow(firstRowCells, -1))
             startRowIndex = 1
         }
-        
+
         for (i in startRowIndex until trElements.size) {
             val row = trElements[i]
-            val cells = row.select("th, td").map { sanitizeElementInline(it) }
+            val cells = row.children().filter { it.tagName().lowercase() in setOf("th", "td") }
             if (cells.isNotEmpty()) {
-                rows.add(cells)
+                rows.add(buildRow(cells, rows.size))
             }
         }
     }
-    
-    if (headers.isEmpty() && rows.isNotEmpty()) {
+
+    // Pad ragged rows so every row is exactly as wide as the widest one; the
+    // renderer can then rely on a true rectangular grid.
+    if (rows.isNotEmpty()) {
         val maxCols = rows.maxOf { it.size }
-        for (col in 1..maxCols) {
-            headers.add("Col $col")
+        for (i in rows.indices) {
+            if (rows[i].size < maxCols) {
+                rows[i] = rows[i] + List(maxCols - rows[i].size) { "" }
+            }
+        }
+        if (headers.isEmpty()) {
+            for (col in 1..maxCols) {
+                headers.add("Col $col")
+            }
         }
     }
-    
-    return WikiBlock.Table(headers, rows)
+
+    return WikiBlock.Table(headers, rows, cellImages)
 }
 
 private val ThumbUrlPattern = Regex("""^(https://upload\.wikimedia\.org/wikipedia/.+)/thumb/(.+)$""", RegexOption.IGNORE_CASE)
@@ -434,10 +510,9 @@ fun parseHtmlToBlocks(html: String, baseUri: String = "https://en.wikipedia.org"
             }
             continue
         } else if (tagName == "table") {
-            val tableImages = element.select("img")
-            for (img in tableImages) {
-                extractWikiImage(img, baseUri)?.let { blocks.add(it) }
-            }
+            // Images inside cells are kept by parseTable in the table's
+            // cellImages map (and rendered in place), so they must not also
+            // be emitted here as detached image blocks.
             try {
                 val table = parseTable(element, baseUri)
                 if (table.headers.isNotEmpty() || table.rows.isNotEmpty()) {

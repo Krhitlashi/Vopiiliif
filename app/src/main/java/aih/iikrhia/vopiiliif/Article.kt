@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.zIndex
@@ -74,6 +75,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import aih.iikrhia.vopiiliif.network.SearchResult
@@ -94,6 +96,7 @@ import kotlinx.coroutines.flow.first
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.TextStyle
@@ -617,7 +620,8 @@ fun WikiTableView(
     table: WikiBlock.Table,
     fontScale: Float,
     currentArticleTitle: String,
-    onLinkClick: (String) -> Unit
+    onLinkClick: (String) -> Unit,
+    onImageClick: (String, String?) -> Unit
 ) {
     val columnCount = maxOf(table.headers.size, table.rows.maxOfOrNull { it.size } ?: 0)
     if (columnCount == 0) return
@@ -628,10 +632,53 @@ fun WikiTableView(
     // The table container is a card, so it takes the regular tanek border like
     // every other card; row separators keep the softer variant below.
     val cardOutlineColor = MaterialTheme.colorScheme.outline
-    // Fixed column width keeps every row's cells aligned in a true grid.
-    val cellWidth = 200.dp
+
+    // Columns are sized by their content instead of a fixed width: each column
+    // takes the widest natural text width among its cells (clamped), so empty
+    // and short cells no longer stretch the whole grid. Cells holding images
+    // reserve extra room so the image stays readable and tappable.
+    val textMeasurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val minCellWidth = 56.dp
+    val maxCellWidth = 260.dp
+    val minImageCellWidth = 96.dp
+    val columnWidths = remember(table, fontScale, textMeasurer, density) {
+        val naturalWidths = FloatArray(columnCount)
+        fun noteCell(col: Int, html: String, images: List<WikiBlock.Image>, fontSizeSp: Float) {
+            val plain = cleanText(html)
+            if (plain.isNotEmpty()) {
+                val result = textMeasurer.measure(
+                    text = AnnotatedString(plain),
+                    style = TextStyle(fontSize = (fontSizeSp * fontScale).sp),
+                    constraints = Constraints(maxWidth = Constraints.Infinity)
+                )
+                if (result.size.width > naturalWidths[col]) {
+                    naturalWidths[col] = result.size.width.toFloat()
+                }
+            }
+            if (images.isNotEmpty()) {
+                val imageWidth = with(density) { minImageCellWidth.toPx() }
+                if (imageWidth > naturalWidths[col]) {
+                    naturalWidths[col] = imageWidth
+                }
+            }
+        }
+        for (col in 0 until columnCount) {
+            noteCell(col, table.headers.getOrNull(col) ?: "", table.cellImages[-1]?.get(col) ?: emptyList(), 18f)
+        }
+        for ((rowIndex, row) in table.rows.withIndex()) {
+            for (col in 0 until columnCount) {
+                noteCell(col, row.getOrNull(col) ?: "", table.cellImages[rowIndex]?.get(col) ?: emptyList(), 15f)
+            }
+        }
+        List(columnCount) { col ->
+            with(density) { naturalWidths[col].toDp() }.coerceIn(minCellWidth, maxCellWidth)
+        }
+    }
     // Every row (header included) is exactly this wide, so cells line up.
-    val tableWidth = cellWidth * columnCount + SpacingAreq * (columnCount - 1)
+    var tableWidth = 0.dp
+    for (w in columnWidths) tableWidth += w
+    tableWidth += SpacingAreq * (columnCount - 1)
 
     Box(
         modifier = Modifier
@@ -666,30 +713,20 @@ fun WikiTableView(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 for (colIndex in 0 until columnCount) {
-                    Box(
+                    TableCell(
                         modifier = Modifier
-                            .inlineSize(cellWidth)
+                            .inlineSize(columnWidths[colIndex])
                             .padding(horizontal = SpacingAreqm2),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        val headerText = table.headers.getOrNull(colIndex) ?: ""
-                        if (headerText.isNotEmpty()) {
-                            HaxeRichText(
-                                htmlText = headerText,
-                                fontScale = fontScale,
-                                isBody = false,
-                                currentArticleTitle = currentArticleTitle,
-                                onLinkClick = onLinkClick,
-                                modifier = Modifier.paddingBlock(bottom = SpacingAreq)
-                            )
-                        } else {
-                            Text(
-                                text = " - ",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
+                        htmlText = table.headers.getOrNull(colIndex) ?: "",
+                        images = table.cellImages[-1]?.get(colIndex) ?: emptyList(),
+                        fontScale = fontScale,
+                        isBody = false,
+                        currentArticleTitle = currentArticleTitle,
+                        onLinkClick = onLinkClick,
+                        onImageClick = onImageClick,
+                        emptyPlaceholder = " - ",
+                        textModifier = Modifier.paddingBlock(bottom = SpacingAreq)
+                    )
                 }
             }
 
@@ -726,26 +763,77 @@ fun WikiTableView(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         for (colIndex in 0 until columnCount) {
-                            val cellText = row.getOrNull(colIndex) ?: ""
-                            Box(
+                            TableCell(
                                 modifier = Modifier
-                                    .inlineSize(cellWidth)
+                                    .inlineSize(columnWidths[colIndex])
                                     .padding(horizontal = SpacingAreqm2),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                HaxeRichText(
-                                    htmlText = cellText,
-                                    fontScale = fontScale * 0.9375f,
-                                    isBody = true,
-                                    currentArticleTitle = currentArticleTitle,
-                                    onLinkClick = onLinkClick,
-                                    modifier = Modifier.paddingBlock(SpacingAreqm2)
-                                )
-                            }
+                                htmlText = row.getOrNull(colIndex) ?: "",
+                                images = table.cellImages[rowIndex]?.get(colIndex) ?: emptyList(),
+                                fontScale = fontScale,
+                                isBody = true,
+                                currentArticleTitle = currentArticleTitle,
+                                onLinkClick = onLinkClick,
+                                onImageClick = onImageClick,
+                                textModifier = Modifier.paddingBlock(SpacingAreqm2)
+                            )
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+// One cell of the table grid: renders any images pulled out of the cell's HTML
+// stacked above the (optionally empty) text. Empty cells keep a small box so
+// the row separator still reads as a grid line.
+@Composable
+private fun TableCell(
+    htmlText: String,
+    images: List<WikiBlock.Image>,
+    fontScale: Float,
+    isBody: Boolean,
+    currentArticleTitle: String,
+    onLinkClick: (String) -> Unit,
+    onImageClick: (String, String?) -> Unit,
+    modifier: Modifier = Modifier,
+    textModifier: Modifier = Modifier,
+    emptyPlaceholder: String? = null
+) {
+    Column(
+        modifier = modifier.fillInlineSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(SpacingAreqm2)
+    ) {
+        for (img in images) {
+            WikiAsyncImage(
+                url = img.url,
+                contentDescription = img.caption ?: "Wikipedia Image",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillInlineSize()
+                    .blockSizeIn(max = 140.dp)
+                    .clip(Shape2tbe)
+                    .clickable { onImageClick(img.url, img.caption) }
+            )
+        }
+        if (htmlText.isNotBlank()) {
+            HaxeRichText(
+                htmlText = htmlText,
+                fontScale = if (isBody) fontScale * 0.9375f else fontScale,
+                isBody = isBody,
+                currentArticleTitle = currentArticleTitle,
+                onLinkClick = onLinkClick,
+                modifier = textModifier
+            )
+        } else if (images.isEmpty() && emptyPlaceholder != null) {
+            Text(
+                text = emptyPlaceholder,
+                style = if (isBody) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else if (images.isEmpty()) {
+            Spacer(modifier = Modifier.blockSize(SpacingAreq))
         }
     }
 }
@@ -927,7 +1015,8 @@ fun SectionBlocksRenderer(
                             table = block,
                             fontScale = fontScale,
                             currentArticleTitle = currentArticleTitle,
-                            onLinkClick = onLinkClick
+                            onLinkClick = onLinkClick,
+                            onImageClick = onImageClick
                         )
                     }
                     else -> {}
@@ -1250,15 +1339,7 @@ fun HaxeRichText(
 ) {
     // Links use the device Material You ( dynamic ) palette so they stand out from the
     // app's monochrome theme. Falls back to the app scheme below Android 12.
-    val context = LocalContext.current
-    val darkTheme = isSystemInDarkTheme()
-    val dynamicScheme = remember(darkTheme, context) {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        } else {
-            null
-        }
-    }
+    val dynamicScheme = rememberDynamicColorScheme()
     val linkColor = dynamicScheme?.primary ?: MaterialTheme.colorScheme.primary
     val sectionLinkColor = dynamicScheme?.secondary ?: MaterialTheme.colorScheme.secondary
     val nonExistentLinkColor = dynamicScheme?.error ?: MaterialTheme.colorScheme.error
@@ -1286,25 +1367,34 @@ fun HaxeRichText(
         }
     }
     
-    val annotatedText = remember(parsedData.first, searchQuery) {
-        val baseText = parsedData.first
+    val (highlightBg, highlightFg) = rememberHighlightColors()
+    val matchRanges = remember(parsedData.first, searchQuery) {
         if (searchQuery.isBlank()) {
+            emptyList()
+        } else {
+            val base = parsedData.first
+            val ranges = mutableListOf<IntRange>()
+            var start = base.indexOf(searchQuery, ignoreCase = true)
+            while (start != -1) {
+                ranges.add(start until start + searchQuery.length)
+                start = base.indexOf(searchQuery, start + searchQuery.length, ignoreCase = true)
+            }
+            ranges
+        }
+    }
+    val annotatedText = remember(parsedData.first, matchRanges, highlightFg) {
+        val baseText = parsedData.first
+        if (matchRanges.isEmpty()) {
             baseText
         } else {
             buildAnnotatedString {
                 append(baseText)
-                var startIndex = baseText.indexOf(searchQuery, ignoreCase = true)
-                while (startIndex != -1) {
+                for (range in matchRanges) {
                     addStyle(
-                        SpanStyle(
-                            background = Color(0xFFF0E080),
-                            color = Color(0xFF000000),
-                            fontWeight = FontWeight.Bold
-                        ),
-                        startIndex,
-                        startIndex + searchQuery.length
+                        SpanStyle(color = highlightFg, fontWeight = FontWeight.Bold),
+                        range.first,
+                        range.last + 1
                     )
-                    startIndex = baseText.indexOf(searchQuery, startIndex + searchQuery.length, ignoreCase = true)
                 }
             }
         }
@@ -1344,8 +1434,10 @@ fun HaxeRichText(
     var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
 
     SelectionContainer {
-        Text(
+        HaxeHighlightText(
             text = annotatedText,
+            highlightRanges = matchRanges,
+            highlightColor = highlightBg,
             inlineContent = inlineContentMap,
             fontSize = ((if (isBody) 16 else 18) * fontScale).sp,
             style = if (isBody) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.titleMedium,

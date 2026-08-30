@@ -176,12 +176,8 @@ fun SearchResultsList(
     onResultClick: (SearchResult) -> Unit,
     query: String = ""
 ) {
-    // Visual style for the part of a title/snippet that matches the typed query.
-    val highlightStyle = SpanStyle(
-        background = MaterialTheme.colorScheme.primaryContainer,
-        color = MaterialTheme.colorScheme.onPrimaryContainer,
-        fontWeight = FontWeight.Bold
-    )
+    // Rounded Material-You (dynamic palette) highlight for the typed query.
+    val (highlightBg, highlightFg) = rememberHighlightColors()
 
     LazyColumn(
         state = lazyListState,
@@ -199,12 +195,17 @@ fun SearchResultsList(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(SpacingAreq)
                 ) {
-                    Text(
+                    val titleRanges = remember(result.title, query) {
+                        if (query.isNotBlank()) queryMatchRanges(result.title, query) else emptyList()
+                    }
+                    HaxeHighlightText(
                         text = if (query.isNotBlank()) {
-                            highlightQuery(result.title, query, highlightStyle)
+                            highlightQuery(result.title, query, SpanStyle(color = highlightFg, fontWeight = FontWeight.Bold))
                         } else {
                             buildAnnotatedString { append(result.title) }
                         },
+                        highlightRanges = titleRanges,
+                        highlightColor = highlightBg,
                         style = MaterialTheme.typography.displaySmall,
                         color = MaterialTheme.colorScheme.onBackground,
                         textAlign = TextAlign.Center,
@@ -215,12 +216,17 @@ fun SearchResultsList(
                         // markup and unescapes entities, leaving the plain text that
                         // we highlight ourselves against the typed query below.
                         val cleaned = cleanText(result.snippet)
-                        Text(
+                        val snippetRanges = remember(cleaned, query) {
+                            if (query.isNotBlank()) queryMatchRanges(cleaned, query) else emptyList()
+                        }
+                        HaxeHighlightText(
                             text = if (query.isNotBlank()) {
-                                highlightQuery(cleaned, query, highlightStyle)
+                                highlightQuery(cleaned, query, SpanStyle(color = highlightFg, fontWeight = FontWeight.Bold))
                             } else {
                                 buildAnnotatedString { append(cleaned) }
                             },
+                            highlightRanges = snippetRanges,
+                            highlightColor = highlightBg,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 3,
